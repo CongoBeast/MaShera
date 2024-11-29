@@ -17,14 +17,21 @@
 #     start_client()
 import socket
 import os
+import time
 
 def send_file(client_socket, filepath):
     filename = os.path.basename(filepath)
     filesize = os.path.getsize(filepath)
+
+    print(filesize)
     
-    # Send file metadata
-    client_socket.sendall(filename.encode('utf-8'))
-    client_socket.sendall(str(filesize).encode('utf-8'))
+    # # Send file metadata
+    # client_socket.sendall(filename.encode('utf-8'))
+    # client_socket.sendall(str(filesize).encode('utf-8'))
+
+    client_socket.sendall(f"{filesize}|{filename}".encode('utf-8'))
+
+    time.sleep(5)
     
     # Send the file content
     with open(filepath, 'rb') as f:
