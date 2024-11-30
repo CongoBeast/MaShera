@@ -75,7 +75,7 @@ def fetch_server_files():
 
 #     threading.Thread(target=download, daemon=True).start()
 def download_file(filename):
-    """Download a selected file from the server with real-time feedback."""
+    """Download a selected file from the server with real-time feedback and immediate completion."""
     def download():
         try:
             config = load_config()
@@ -111,13 +111,14 @@ def download_file(filename):
         except Exception as e:
             messagebox.showerror("Error", f"File download failed: {e}")
         finally:
+            # Ensure progress bar is hidden after download
+            client_socket.close()  # Ensure the socket is closed
             root.after(0, progress_bar.grid_remove)
 
-    # Show the progress bar and start the thread
+    # Initialize progress bar and launch the download thread
     progress_var.set(0)
     progress_bar.grid()
     threading.Thread(target=download, daemon=True).start()
-
 
 def refresh_file_list(file_list):
     """Refresh the list of files from the server."""
