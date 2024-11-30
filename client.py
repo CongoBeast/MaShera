@@ -1,12 +1,13 @@
 import socket
 import os
-import time
 import json
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter import scrolledtext
+import time
+import threading
 
 CONFIG_FILE = "config.json"
-uploaded_files = []
 
 def save_config(server_ip, server_port, username):
     config = {"server_ip": server_ip, "server_port": server_port, "username": username}
@@ -19,56 +20,159 @@ def load_config():
             return json.load(f)
     return None
 
-def send_file(client_socket, filepath, progress_var, progress_bar, uploaded_files_list):
-    filename = os.path.basename(filepath)
-    filesize = os.path.getsize(filepath)
-
+def fetch_server_files():
+    """Fetch the list of uploaded files from the server."""
     try:
-        client_socket.sendall(f"{filesize}|{filename}".encode('utf-8'))
-        time.sleep(5)
+        config = load_config()
+        if not config:
+            raise ValueError("Server configuration is missing.")
 
-        with open(filepath, 'rb') as f:
-            sent_size = 0
-            while (chunk := f.read(1024)):
-                client_socket.sendall(chunk)
-                sent_size += len(chunk)
-                progress = (sent_size / filesize) * 100
-                progress_var.set(progress)
-                progress_bar.update_idletasks()
+        host = config["server_ip"]
+        port = int(config["server_port"])
 
-        uploaded_files.append(filename)
-        uploaded_files_list.insert(tk.END, filename)
-        messagebox.showinfo("Success", f"File '{filename}' uploaded successfully!")
-    except Exception as e:
-        messagebox.showerror("Error", f"File upload failed: {e}")
-
-def start_client(host, port, filepath, progress_var, progress_bar, uploaded_files_list):
-    try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
             client_socket.connect((host, port))
-            send_file(client_socket, filepath, progress_var, progress_bar, uploaded_files_list)
-    except Exception as e:
-        messagebox.showerror("Error", f"Could not connect to server: {e}")
-    finally:
-        progress_bar.grid_remove()  # Hide progress bar after completion
+            client_socket.sendall(b"LIST_FILES")
+            data = client_socket.recv(4096).decode('utf-8')
+            return data.split("\n") if data else []
 
-def upload_file(progress_var, progress_bar, uploaded_files_list):
+    except Exception as e:
+        messagebox.showerror("Error", f"Could not fetch server files: {e}")
+        return []
+
+# def download_file(filename):
+#     """Download a selected file from the server."""
+#     def download():
+#         try:
+#             messagebox.showinfo("Download", f"Starting download for '{filename}'...")
+            
+#             config = load_config()
+#             if not config:
+#                 raise ValueError("Server configuration is missing.")
+
+#             host = config["server_ip"]
+#             port = int(config["server_port"])
+
+#             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+#                 client_socket.connect((host, port))
+#                 client_socket.sendall(f"DOWNLOAD|{filename}".encode('utf-8'))
+
+#                 save_path = filedialog.asksaveasfilename(initialfile=filename, title="Save As")
+#                 if not save_path:
+#                     return
+
+#                 with open(save_path, 'wb') as f:
+#                     while True:
+#                         chunk = client_socket.recv(1024)
+#                         if not chunk:
+#                             break
+#                         f.write(chunk)
+
+#                 messagebox.showinfo("Success", f"File '{filename}' downloaded successfully!")
+
+#         except Exception as e:
+#             messagebox.showerror("Error", f"File download failed: {e}")
+
+#     threading.Thread(target=download, daemon=True).start()
+def download_file(filename):
+    """Download a selected file from the server with real-time feedback."""
+    def download():
+        try:
+            config = load_config()
+            if not config:
+                raise ValueError("Server configuration is missing.")
+
+            host = config["server_ip"]
+            port = int(config["server_port"])
+
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+                client_socket.connect((host, port))
+                client_socket.sendall(f"DOWNLOAD|{filename}".encode('utf-8'))
+
+                save_path = filedialog.asksaveasfilename(initialfile=filename, title="Save As")
+                if not save_path:
+                    return
+
+                with open(save_path, 'wb') as f:
+                    total_received = 0
+                    while True:
+                        chunk = client_socket.recv(1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        total_received += len(chunk)
+
+                        # Update the progress bar in the main thread
+                        root.after(0, progress_var.set, total_received)
+                        root.after(0, progress_bar.update_idletasks)
+
+                messagebox.showinfo("Success", f"File '{filename}' downloaded successfully!")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"File download failed: {e}")
+        finally:
+            root.after(0, progress_bar.grid_remove)
+
+    # Show the progress bar and start the thread
+    progress_var.set(0)
+    progress_bar.grid()
+    threading.Thread(target=download, daemon=True).start()
+
+
+def refresh_file_list(file_list):
+    """Refresh the list of files from the server."""
+    files = fetch_server_files()
+    file_list.delete(0, tk.END)
+    for file in files:
+        file_list.insert(tk.END, file)
+
+def upload_file(progress_var, progress_bar, file_list):
+    """Upload a file to the server."""
     filepath = filedialog.askopenfilename(title="Select File")
     if not filepath:
         return
 
+    messagebox.showinfo("Upload", "Starting file upload...")
+
     config = load_config()
-    if config:
-        server_ip = config["server_ip"]
-        server_port = int(config["server_port"])
+    if not config:
+        messagebox.showerror("Error", "Server configuration is missing.")
+        return
 
-        progress_var.set(0)
-        progress_bar.grid()  # Show progress bar
-        progress_bar.update_idletasks()
+    server_ip = config["server_ip"]
+    server_port = int(config["server_port"])
 
-        start_client(server_ip, server_port, filepath, progress_var, progress_bar, uploaded_files_list)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
+            client_socket.connect((server_ip, server_port))
+            filename = os.path.basename(filepath)
+            filesize = os.path.getsize(filepath)
+
+            client_socket.sendall(f"UPLOAD|{filesize}|{filename}".encode('utf-8'))
+
+            # Show progress bar
+            progress_var.set(0)
+            progress_bar.grid()
+            progress_bar.update_idletasks()
+
+            with open(filepath, 'rb') as f:
+                sent_size = 0
+                while (chunk := f.read(1024)):
+                    client_socket.sendall(chunk)
+                    sent_size += len(chunk)
+                    progress_var.set((sent_size / filesize) * 100)
+                    progress_bar.update_idletasks()
+
+            messagebox.showinfo("Success", f"File '{filename}' uploaded successfully!")
+            refresh_file_list(file_list)
+
+    except Exception as e:
+        messagebox.showerror("Error", f"File upload failed: {e}")
+    finally:
+        progress_bar.grid_remove()
 
 def prompt_for_server_and_user():
+    """Prompt the user for server IP, port, and their name."""
     def save_and_close():
         server_ip = ip_entry.get()
         server_port = port_entry.get()
@@ -79,7 +183,7 @@ def prompt_for_server_and_user():
             return
 
         try:
-            int(server_port)  # Validate port is numeric
+            int(server_port)
         except ValueError:
             messagebox.showwarning("Input Error", "Port must be a number.")
             return
@@ -107,32 +211,50 @@ def prompt_for_server_and_user():
     save_button = ttk.Button(config_window, text="Save", command=save_and_close)
     save_button.grid(column=0, row=3, columnspan=2, pady=20)
 
-# Build the GUI
+# GUI Setup
 root = tk.Tk()
-root.title("File Upload Client")
-root.geometry("400x400")
-root.resizable(False, False)
+root.title("File Upload & Download Client")
+root.geometry("600x700")
 
 frame = ttk.Frame(root, padding="20")
 frame.pack(fill=tk.BOTH, expand=True)
 
-# Uploaded Files List
-ttk.Label(frame, text="Uploaded Files:").grid(column=0, row=0, sticky=tk.W)
-uploaded_files_list = tk.Listbox(frame, height=10)
-uploaded_files_list.grid(column=0, row=1, columnspan=2, pady=10)
+# Greeting
+config = load_config()
+username = config["username"] if config else "User"
+ttk.Label(frame, text=f"Hello, {username}!", font=("Helvetica", 16)).grid(column=0, row=0, sticky=tk.W, pady=10)
 
-# Upload Button
-upload_button = ttk.Button(frame, text="Upload File", command=lambda: upload_file(progress_var, progress_bar, uploaded_files_list))
-upload_button.grid(column=0, row=2, columnspan=2, pady=20)
+# File List with Scrollbar
+ttk.Label(frame, text="Files on Server:").grid(column=0, row=1, sticky=tk.W)
+file_list_frame = ttk.Frame(frame)
+file_list_frame.grid(column=0, row=2, columnspan=2, pady=10)
+
+file_list_scrollbar = ttk.Scrollbar(file_list_frame, orient=tk.VERTICAL)
+file_list = tk.Listbox(file_list_frame, height=15, width=60, selectmode=tk.SINGLE, yscrollcommand=file_list_scrollbar.set)
+file_list_scrollbar.config(command=file_list.yview)
+
+file_list.pack(side=tk.LEFT, fill=tk.BOTH)
+file_list_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+# Buttons
+refresh_button = ttk.Button(frame, text="Refresh", command=lambda: refresh_file_list(file_list))
+refresh_button.grid(column=0, row=3, pady=10)
+
+download_button = ttk.Button(frame, text="Download", command=lambda: download_file(file_list.get(tk.ACTIVE)))
+download_button.grid(column=1, row=3, pady=10)
+
+upload_button = ttk.Button(frame, text="Upload File", command=lambda: upload_file(progress_var, progress_bar, file_list))
+upload_button.grid(column=0, row=4, columnspan=2, pady=20)
 
 # Progress Bar
 progress_var = tk.DoubleVar()
 progress_bar = ttk.Progressbar(frame, orient="horizontal", length=300, mode="determinate", variable=progress_var)
-progress_bar.grid(column=0, row=3, columnspan=2, pady=10)
-progress_bar.grid_remove()  # Hidden by default
+progress_bar.grid(column=0, row=5, columnspan=2, pady=10)
+progress_bar.grid_remove()
 
-# Prompt for server and user setup if config does not exist
 if not load_config():
     prompt_for_server_and_user()
+else:
+    refresh_file_list(file_list)
 
 root.mainloop()
